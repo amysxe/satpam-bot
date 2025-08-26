@@ -79,7 +79,7 @@ async def post_init(app: Application):
         trigger="cron",
         day_of_week="mon-fri",   # ✅ only weekdays
         hour=17,
-        minute=0
+        minute=50
     )
     scheduler.start()
     logging.info("📅 Scheduler started (Mon–Fri, 17:00 Asia/Jakarta)")
