@@ -5,7 +5,7 @@ import pytz
 import asyncio
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Logging
@@ -18,6 +18,9 @@ logging.basicConfig(
 TOKEN = os.getenv("TOKEN")
 GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID"))
 
+# In-memory store of users (key = user_id, value = username/first_name)
+group_members = {}
+
 # Format today date
 def get_today():
     tz = pytz.timezone("Asia/Jakarta")
@@ -26,16 +29,10 @@ def get_today():
 # Function to fetch members and send standup questions
 async def send_standup(bot):
     try:
-        chat = await bot.get_chat(GROUP_CHAT_ID)
-        members = []
-        async for member in bot.get_chat_administrators(GROUP_CHAT_ID):
-            # only collect usernames if available
-            if member.user.username:
-                members.append(f"@{member.user.username}")
-            else:
-                members.append(member.user.first_name)
-
-        mentions = " ".join(members) if members else "everyone"
+        if not group_members:
+            mentions = "everyone"
+        else:
+            mentions = " ".join(group_members.values())
 
         message = (
             f"📅 {get_today()}\n\n"
@@ -57,6 +54,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manual_standup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_standup(context.bot)
 
+# Message handler to track users
+async def track_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return  # only track in target group
+
+    user = update.effective_user
+    if not user:
+        return
+
+    if user.username:
+        name = f"@{user.username}"
+    else:
+        name = user.first_name
+
+    group_members[user.id] = name
+    logging.info(f"👤 Tracked member: {name}")
+
 # Scheduler hook
 async def post_init(app: Application):
     scheduler = AsyncIOScheduler(timezone=pytz.timezone("Asia/Jakarta"))
@@ -74,8 +88,12 @@ async def post_init(app: Application):
 def main():
     application = Application.builder().token(TOKEN).post_init(post_init).build()
 
+    # Commands
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("standup", manual_standup))
+
+    # Track all messages to build member list
+    application.add_handler(MessageHandler(filters.ALL, track_members))
 
     application.run_polling()
 
