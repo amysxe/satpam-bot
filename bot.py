@@ -1,15 +1,14 @@
 import os
 import logging
 import datetime
-from telegram import Update
+import pytz
 from telegram.ext import Application, CommandHandler, ContextTypes
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# Logging (to see errors)
 logging.basicConfig(level=logging.INFO)
 
-# Get token & group id from Railway environment variables
-TOKEN = 8463579297:AAG25r2_GaWE-M2JEjHoAVjhIYqWTlO-9f4
-GROUP_CHAT_ID = -1002834266877
+TOKEN = os.getenv("TOKEN")
+GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID"))
 
 # Generate daily standup text
 def generate_standup_text():
@@ -20,20 +19,49 @@ def generate_standup_text():
 - What is your plan for tomorrow?
 """
 
-# /start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Daily standup bot activated ✅")
+# Fetch all visible members (requires bot to be Admin)
+async def get_group_usernames(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        members = await context.bot.get_chat_administrators(GROUP_CHAT_ID)
+        usernames = []
+        for m in members:
+            if m.user.username:
+                usernames.append("@" + m.user.username)
+            else:
+                usernames.append(m.user.first_name)  # fallback
+        return " ".join(usernames) if usernames else "Team"
+    except Exception as e:
+        logging.error(f"Error fetching members: {e}")
+        return "Team"
 
-# /standup command (manual trigger)
-async def standup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Send standup message
+async def send_standup(context: ContextTypes.DEFAULT_TYPE):
+    mentions = await get_group_usernames(context)
     text = generate_standup_text()
-    members = ["@user1", "@user2", "@user3"]  # change to your Telegram usernames
-    mentions = " ".join(members)
     await context.bot.send_message(GROUP_CHAT_ID, f"{mentions}\n{text}")
 
-# Main app
-app = Application.builder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("standup", standup))
+# Manual command
+async def standup(update, context: ContextTypes.DEFAULT_TYPE):
+    await send_standup(context)
 
-app.run_polling()
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    # Manual command
+    app.add_handler(CommandHandler("standup", standup))
+
+    # Scheduler: 5PM Asia/Jakarta
+    scheduler = AsyncIOScheduler(timezone=pytz.timezone("Asia/Jakarta"))
+    scheduler.add_job(
+        lambda: app.job_queue.application.create_task(send_standup(app)),
+        trigger="cron",
+        hour=17,
+        minute=0
+    )
+    scheduler.start()
+
+    print("BOT IS RUNNING ✅")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
