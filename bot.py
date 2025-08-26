@@ -14,10 +14,10 @@ JAKARTA_TZ = pytz.timezone("Asia/Jakarta")
 # STANDUP QUESTIONS
 # ==============================
 STANDUP_QUESTIONS = (
-    "👋 Standup time!\n\n"
-    "1. What did you work on yesterday?\n"
-    "2. What are you working on today?\n"
-    "3. Any blockers?"
+    "👋 What time is it? It's huddle time!\n\n"
+    "1. What have you done today?\n"
+    "2. Any blockers??\n"
+    "3. What is your plan for tomorrow?"
 )
 
 # ==============================
