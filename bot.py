@@ -13,8 +13,8 @@ logging.basicConfig(
 )
 
 # --- CONFIG ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # set in Railway variables
-GROUP_ID = os.getenv("GROUP_ID")    # your group chat ID
+BOT_TOKEN = os.getenv("TOKEN")  # set in Railway variables
+GROUP_ID = os.getenv("GROUP_CHAT_ID")    # your group chat ID
 TIMEZONE = pytz.timezone("Asia/Jakarta")
 
 # Scheduler
