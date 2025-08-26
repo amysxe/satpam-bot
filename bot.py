@@ -8,8 +8,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 logging.basicConfig(level=logging.INFO)
 
 # Get token & group id from Railway environment variables
-TOKEN = os.getenv("TOKEN")
-GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID"))
+TOKEN = 8463579297:AAG25r2_GaWE-M2JEjHoAVjhIYqWTlO-9f4
+GROUP_CHAT_ID = -1002834266877
 
 # Generate daily standup text
 def generate_standup_text():
