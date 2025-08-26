@@ -1,15 +1,24 @@
 import logging
 import os
 import pytz
-from datetime import datetime
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import time
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- CONFIG ---
 BOT_TOKEN = os.getenv("TOKEN")  # set in Railway variables
-GROUP_ID = os.getenv("GROUP_CHAT_ID")    # your group chat ID
-TIMEZONE = pytz.timezone("Asia/Jakarta")
+GROUP_ID = os.getenv("GROUP_CHAT_ID")  # your group chat ID (string)
+JAKARTA_TZ = pytz.timezone("Asia/Jakarta")
+
+# ==============================
+# STANDUP QUESTIONS
+# ==============================
+STANDUP_QUESTIONS = (
+    "👋 Standup time!\n\n"
+    "1. What did you work on yesterday?\n"
+    "2. What are you working on today?\n"
+    "3. Any blockers?"
+)
 
 # ==============================
 # LOGGING
@@ -33,13 +42,11 @@ async def standup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(STANDUP_QUESTIONS)
 
 async def standup_job(context: ContextTypes.DEFAULT_TYPE):
-    """Job that sends standup only on weekdays"""
-    weekday = pytz.utc.localize(context.job.when).astimezone(JAKARTA_TZ).weekday()
-    if weekday < 5:  # Monday=0 ... Friday=4
-        await context.bot.send_message(
-            chat_id=context.job.chat_id,
-            text=STANDUP_QUESTIONS
-        )
+    """Job that sends standup to the group"""
+    await context.bot.send_message(
+        chat_id=context.job.chat_id,
+        text=STANDUP_QUESTIONS
+    )
 
 async def settime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Schedule standup at a specific time (Jakarta)"""
@@ -48,7 +55,17 @@ async def settime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        hour, minute = map(int, context.args[0].split(":"))
+        # normalize input (accepts 9:5, 09:05, 18:9, etc.)
+        parts = context.args[0].split(":")
+        if len(parts) != 2:
+            raise ValueError("Invalid format")
+
+        hour = int(parts[0])
+        minute = int(parts[1])
+
+        if not (0 <= hour < 24 and 0 <= minute < 60):
+            raise ValueError("Invalid range")
+
         job_time = time(hour=hour, minute=minute, tzinfo=JAKARTA_TZ)
 
         chat_id = update.effective_chat.id
@@ -58,7 +75,7 @@ async def settime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for job in current_jobs:
             job.schedule_removal()
 
-        # Add new job
+        # Add new job (Mon–Fri only)
         context.job_queue.run_daily(
             standup_job,
             time=job_time,
@@ -72,7 +89,9 @@ async def settime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logging.error("Error in /settime: %s", e)
-        await update.message.reply_text("❌ Invalid time format. Use HH:MM (e.g. /settime 17:30)")
+        await update.message.reply_text(
+            "❌ Invalid time format. Try: /settime 09:00 or /settime 18:30"
+        )
 
 # ==============================
 # MAIN
