@@ -1,12 +1,10 @@
-import os
 import logging
-from datetime import datetime
+import os
 import pytz
-import asyncio
-
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 # Logging
 logging.basicConfig(
@@ -14,88 +12,97 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Environment variables
-TOKEN = os.getenv("TOKEN")
-GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID"))
+# --- CONFIG ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # set in Railway variables
+GROUP_ID = os.getenv("GROUP_ID")    # your group chat ID
+TIMEZONE = pytz.timezone("Asia/Jakarta")
 
-# In-memory store of users (key = user_id, value = username/first_name)
-group_members = {}
+# Scheduler
+scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+job_id = "standup_job"
 
-# Format today date
-def get_today():
-    tz = pytz.timezone("Asia/Jakarta")
-    return datetime.now(tz).strftime("%d %b %Y")
-
-# Function to fetch members and send standup questions
-async def send_standup(bot):
-    try:
-        if not group_members:
-            mentions = "everyone"
-        else:
-            mentions = " ".join(group_members.values())
-
-        message = (
-            f"📅 {get_today()}\n\n"
-            f"{mentions}\n\n"
-            "- What did you do today?\n"
-            "- Do you have any blocker?\n"
-            "- What is your plan for tomorrow?"
-        )
-
-        await bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
-        logging.info("✅ Standup message sent")
-    except Exception as e:
-        logging.error(f"❌ Error sending standup: {e}")
-
-# Command handlers
+# --- BOT FUNCTIONS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Daily standup bot activated!")
+    await update.message.reply_text(
+        "👋 Hello! I’ll help with daily standups.\n"
+        "Commands:\n"
+        "• /standup → send questions now\n"
+        "• /settime HH:MM → set daily standup time (WIB)"
+    )
 
-async def manual_standup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def standup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_standup(context.bot)
 
-# Message handler to track users
-async def track_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != GROUP_CHAT_ID:
-        return  # only track in target group
+async def send_standup(bot):
+    today = datetime.now(TIMEZONE).strftime("%d %b %Y")
+    logging.info("⏰ Triggered standup job")
 
-    user = update.effective_user
-    if not user:
+    text = (
+        f"📅 *{today}* — Daily Standup\n\n"
+        "- What do you today?\n"
+        "- Do you have any blocker?\n"
+        "- What is your plan for tomorrow?"
+    )
+
+    await bot.send_message(
+        chat_id=GROUP_ID,
+        text=text,
+        parse_mode="Markdown"
+    )
+
+async def settime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global job_id
+    if not context.args:
+        await update.message.reply_text("⏰ Usage: /settime HH:MM (24h, WIB)")
         return
 
-    if user.username:
-        name = f"@{user.username}"
-    else:
-        name = user.first_name
+    try:
+        hour, minute = map(int, context.args[0].split(":"))
+    except ValueError:
+        await update.message.reply_text("⚠️ Invalid format. Use HH:MM")
+        return
 
-    group_members[user.id] = name
-    logging.info(f"👤 Tracked member: {name}")
+    # Remove old job
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
 
-# Scheduler hook
-async def post_init(app: Application):
-    scheduler = AsyncIOScheduler(timezone=pytz.timezone("Asia/Jakarta"))
+    # Add new job
     scheduler.add_job(
-        lambda: app.create_task(send_standup(app.bot)),
+        lambda: context.application.create_task(send_standup(context.bot)),
         trigger="cron",
-        day_of_week="mon-fri",   # ✅ only weekdays
-        hour=17,
-        minute=50
+        day_of_week="mon-fri",
+        hour=hour,
+        minute=minute,
+        id=job_id
     )
-    scheduler.start()
-    logging.info("📅 Scheduler started (Mon–Fri, 17:00 Asia/Jakarta)")
 
-# Main
+    await update.message.reply_text(f"✅ Standup time set to {hour:02d}:{minute:02d} WIB (Mon–Fri)")
+
+# --- MAIN APP ---
 def main():
-    application = Application.builder().token(TOKEN).post_init(post_init).build()
+    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # Commands
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("standup", manual_standup))
-
-    # Track all messages to build member list
-    application.add_handler(MessageHandler(filters.ALL, track_members))
+    application.add_handler(CommandHandler("standup", standup))
+    application.add_handler(CommandHandler("settime", settime))
 
     application.run_polling()
+
+async def post_init(app: Application):
+    # Start scheduler
+    if not scheduler.running:
+        scheduler.start()
+    # Default 17:00 Mon–Fri
+    if not scheduler.get_job(job_id):
+        scheduler.add_job(
+            lambda: app.create_task(send_standup(app.bot)),
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=17,
+            minute=0,
+            id=job_id
+        )
+    logging.info("📅 Scheduler initialized (Mon–Fri 17:00 WIB)")
 
 if __name__ == "__main__":
     main()
