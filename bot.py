@@ -6,103 +6,90 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# Logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-
 # --- CONFIG ---
 BOT_TOKEN = os.getenv("TOKEN")  # set in Railway variables
 GROUP_ID = os.getenv("GROUP_CHAT_ID")    # your group chat ID
 TIMEZONE = pytz.timezone("Asia/Jakarta")
 
-# Scheduler
-scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-job_id = "standup_job"
+# ==============================
+# LOGGING
+# ==============================
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
-# --- BOT FUNCTIONS ---
+# ==============================
+# COMMAND HANDLERS
+# ==============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Hello! I’ll help with daily standups.\n"
-        "Commands:\n"
-        "• /standup → send questions now\n"
-        "• /settime HH:MM → set daily standup time (WIB)"
+        "Hello! 👋\n\n"
+        "Use /standup to start manually.\n"
+        "Use /settime HH:MM to schedule daily standups (Asia/Jakarta timezone)."
     )
 
 async def standup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_standup(context.bot)
+    await update.message.reply_text(STANDUP_QUESTIONS)
 
-async def send_standup(bot):
-    today = datetime.now(TIMEZONE).strftime("%d %b %Y")
-    logging.info("⏰ Triggered standup job")
-
-    text = (
-        f"📅 *{today}* — Daily Standup\n\n"
-        "- What do you today?\n"
-        "- Do you have any blocker?\n"
-        "- What is your plan for tomorrow?"
-    )
-
-    await bot.send_message(
-        chat_id=GROUP_ID,
-        text=text,
-        parse_mode="Markdown"
-    )
+async def standup_job(context: ContextTypes.DEFAULT_TYPE):
+    """Job that sends standup only on weekdays"""
+    weekday = pytz.utc.localize(context.job.when).astimezone(JAKARTA_TZ).weekday()
+    if weekday < 5:  # Monday=0 ... Friday=4
+        await context.bot.send_message(
+            chat_id=context.job.chat_id,
+            text=STANDUP_QUESTIONS
+        )
 
 async def settime(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global job_id
-    if not context.args:
-        await update.message.reply_text("⏰ Usage: /settime HH:MM (24h, WIB)")
+    """Schedule standup at a specific time (Jakarta)"""
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: /settime HH:MM (24h format)")
         return
 
     try:
         hour, minute = map(int, context.args[0].split(":"))
-    except ValueError:
-        await update.message.reply_text("⚠️ Invalid format. Use HH:MM")
-        return
+        job_time = time(hour=hour, minute=minute, tzinfo=JAKARTA_TZ)
 
-    # Remove old job
-    if scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)
+        chat_id = update.effective_chat.id
 
-    # Add new job
-    scheduler.add_job(
-        lambda: context.application.create_task(send_standup(context.bot)),
-        trigger="cron",
-        day_of_week="mon-fri",
-        hour=hour,
-        minute=minute,
-        id=job_id
-    )
+        # Remove old job if exists
+        current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
+        for job in current_jobs:
+            job.schedule_removal()
 
-    await update.message.reply_text(f"✅ Standup time set to {hour:02d}:{minute:02d} WIB (Mon–Fri)")
+        # Add new job
+        context.job_queue.run_daily(
+            standup_job,
+            time=job_time,
+            days=(0, 1, 2, 3, 4),  # Monday–Friday
+            chat_id=chat_id,
+            name=str(chat_id),
+        )
 
-# --- MAIN APP ---
+        await update.message.reply_text(
+            f"✅ Daily standup scheduled at {hour:02}:{minute:02} (Asia/Jakarta, Mon–Fri)"
+        )
+    except Exception as e:
+        logging.error("Error in /settime: %s", e)
+        await update.message.reply_text("❌ Invalid time format. Use HH:MM (e.g. /settime 17:30)")
+
+# ==============================
+# MAIN
+# ==============================
 def main():
-    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    if not BOT_TOKEN:
+        raise ValueError("❌ BOT TOKEN not set. Add it as 'TOKEN' in Railway variables.")
 
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("standup", standup))
     application.add_handler(CommandHandler("settime", settime))
 
+    # Run bot
     application.run_polling()
-
-async def post_init(app: Application):
-    # Start scheduler
-    if not scheduler.running:
-        scheduler.start()
-    # Default 17:00 Mon–Fri
-    if not scheduler.get_job(job_id):
-        scheduler.add_job(
-            lambda: app.create_task(send_standup(app.bot)),
-            trigger="cron",
-            day_of_week="mon-fri",
-            hour=17,
-            minute=0,
-            id=job_id
-        )
-    logging.info("📅 Scheduler initialized (Mon–Fri 17:00 WIB)")
 
 if __name__ == "__main__":
     main()
