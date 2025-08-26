@@ -1,67 +1,83 @@
 import os
 import logging
-import datetime
+from datetime import datetime
 import pytz
+import asyncio
+
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-logging.basicConfig(level=logging.INFO)
+# Logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
+# Environment variables
 TOKEN = os.getenv("TOKEN")
 GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID"))
 
-# Generate daily standup text
-def generate_standup_text():
-    today = datetime.datetime.now().strftime("%d %b %Y")
-    return f"""{today}
-- What did you do today?
-- Do you have any blocker?
-- What is your plan for tomorrow?
-"""
+# Format today date
+def get_today():
+    tz = pytz.timezone("Asia/Jakarta")
+    return datetime.now(tz).strftime("%d %b %Y")
 
-# Fetch all visible members (requires bot to be Admin)
-async def get_group_usernames(context: ContextTypes.DEFAULT_TYPE):
+# Function to fetch members and send standup questions
+async def send_standup(bot):
     try:
-        members = await context.bot.get_chat_administrators(GROUP_CHAT_ID)
-        usernames = []
-        for m in members:
-            if m.user.username:
-                usernames.append("@" + m.user.username)
+        chat = await bot.get_chat(GROUP_CHAT_ID)
+        members = []
+        async for member in bot.get_chat_administrators(GROUP_CHAT_ID):
+            # only collect usernames if available
+            if member.user.username:
+                members.append(f"@{member.user.username}")
             else:
-                usernames.append(m.user.first_name)  # fallback
-        return " ".join(usernames) if usernames else "Team"
+                members.append(member.user.first_name)
+
+        mentions = " ".join(members) if members else "everyone"
+
+        message = (
+            f"📅 {get_today()}\n\n"
+            f"{mentions}\n\n"
+            "- What did you do today?\n"
+            "- Do you have any blocker?\n"
+            "- What is your plan for tomorrow?"
+        )
+
+        await bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+        logging.info("✅ Standup message sent")
     except Exception as e:
-        logging.error(f"Error fetching members: {e}")
-        return "Team"
+        logging.error(f"❌ Error sending standup: {e}")
 
-# Send standup message
-async def send_standup(context: ContextTypes.DEFAULT_TYPE):
-    mentions = await get_group_usernames(context)
-    text = generate_standup_text()
-    await context.bot.send_message(GROUP_CHAT_ID, f"{mentions}\n{text}")
+# Command handlers
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Daily standup bot activated!")
 
-# Manual command
-async def standup(update, context: ContextTypes.DEFAULT_TYPE):
-    await send_standup(context)
+async def manual_standup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_standup(context.bot)
 
-def main():
-    app = Application.builder().token(TOKEN).build()
-
-    # Manual command
-    app.add_handler(CommandHandler("standup", standup))
-
-    # Scheduler: 5PM Asia/Jakarta
+# Scheduler hook
+async def post_init(app: Application):
     scheduler = AsyncIOScheduler(timezone=pytz.timezone("Asia/Jakarta"))
     scheduler.add_job(
-        lambda: app.job_queue.application.create_task(send_standup(app)),
+        lambda: app.create_task(send_standup(app.bot)),
         trigger="cron",
+        day_of_week="mon-fri",   # ✅ only weekdays
         hour=17,
         minute=0
     )
     scheduler.start()
+    logging.info("📅 Scheduler started (Mon–Fri, 17:00 Asia/Jakarta)")
 
-    print("BOT IS RUNNING ✅")
-    app.run_polling()
+# Main
+def main():
+    application = Application.builder().token(TOKEN).post_init(post_init).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("standup", manual_standup))
+
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
